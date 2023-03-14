@@ -1,0 +1,81 @@
+import subprocess, importlib, inspect, os, sys, sqlite3
+
+DEFAULT_MODULES = ['numpy', 'pandas', 'matplotlib', 'scikit-learn']
+REQUIRED_RESOURCES = ['punkt']
+
+def main():
+    create_database()
+    install_required_resources()
+    installed_modules = get_installed_modules()
+    while True:
+        user_input = input('How can I help you? ')
+        try:
+            tokens = nltk.word_tokenize(user_input.lower())
+        except NameError:
+            print('The Natural Language Toolkit is not installed. Please wait while I install it...')
+            subprocess.call([sys.executable, "-m", "pip", "install", "nltk"])
+            install_required_resources()
+            import nltk
+            continue
+        try:
+            if 'install' in tokens and 'module' in tokens:
+                module = [t for t in tokens if t not in ('install', 'module')][0]
+                if module not in installed_modules:
+                    subprocess.call(['pip', 'install', module])
+                    installed_modules.append(module)
+                    add_installed_module(module)
+            elif 'import' in tokens:
+                module = [t for t in tokens if t != 'import'][0]
+                if module not in installed_modules:
+                    print(f'{module} is not installed. Install? (y/n) ')
+                    if input().lower() == 'y':
+                        subprocess.call(['pip', 'install', module])
+                        installed_modules.append(module)
+                        add_installed_module(module)
+                    else: continue
+                try:
+                    attributes = inspect.getmembers(importlib.import_module(module), inspect.isclass)
+                    print(f'{module} attributes:\n' + '\n'.join(f' - {attr[0]}' for attr in attributes))
+                except ImportError: print(f'Unable to import {module}.')
+            elif 'exit' in tokens or 'quit' in tokens:
+                print('Goodbye!'); break
+            elif 'help' in tokens: print('Install a new module, import a module, or exit.')
+            else: print('I did not understand your request. Type "help" for assistance.')
+        except Exception as e: print(f'An error occurred: {e}')
+
+def create_database():
+    conn = sqlite3.connect('modules.db')
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS modules (name text)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS resources (name text)''')
+    conn.commit()
+    conn.close()
+
+def add_installed_module(module):
+    conn = sqlite3.connect('modules.db')
+    c = conn.cursor()
+    c.execute(f"INSERT INTO modules VALUES ('{module}')")
+    conn.commit()
+    conn.close()
+
+def add_required_resource(resource):
+    conn = sqlite3.connect('modules.db')
+    c = conn.cursor()
+    c.execute(f"INSERT INTO resources VALUES ('{resource}')")
+    conn.commit()
+    conn.close()
+
+def install_required_resources():
+    for resource in REQUIRED_RESOURCES:
+        try:
+            importlib.import_module(resource)
+        except ImportError:
+            subprocess.call([sys.executable, "-m", "nltk.downloader", resource])
+            add_required_resource(resource)
+
+def get_installed_modules():
+    if not os.path.exists('installed_modules.txt'):
+        with open('installed_modules.txt', 'w') as f: f.write('\n'.join(DEFAULT_MODULES))
+    with open('installed_modules.txt', 'r') as f: return f.read().splitlines()
+
+if __name__ == '__main__': main()
