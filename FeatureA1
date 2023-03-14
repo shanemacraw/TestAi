@@ -1,0 +1,50 @@
+import importlib.util, json, difflib, sqlite3, ast
+from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.naive_bayes import MultinomialNB
+from typing import List, Dict
+
+class FeatureA1:
+    def __init__(self, ai_url=None, db_paths=None):
+        self.check_and_install_module("numpy")
+        self.vectorizer, self.classifier, self.snippets, self.ai_url, self.db_paths = self.check_module("sklearn", "CountVectorizer"), self.check_module("sklearn", "MultinomialNB"), [], ai_url, db_paths
+        for db_path in db_paths:
+            conn, cursor = sqlite3.connect(db_path), sqlite3.connect(db_path).cursor()
+            self.snippets.extend([row[0] for row in cursor.execute('SELECT code_snippet FROM snippets')])
+            self.learn_snippets([row[0] for row in cursor.execute('SELECT code_snippet FROM snippets')])
+
+    def check_and_install_module(self, module_name):
+        try: importlib.util.find_spec(module_name) or __import__(module_name)
+        except: import subprocess; subprocess.check_call(["pip", "install", module_name])
+
+    def check_module(self, package_name, module_name):
+        try: importlib.util.find_spec(module_name, package_name).loader.exec_module(__import__(module_name)); return __import__(module_name)
+        except: import subprocess; subprocess.check_call(["pip", "install", package_name]); return __import__(module_name)
+
+    def learn_snippets(self, snippets: List[str]) -> None:
+        self.snippets.extend(snippets)
+        X, y = self.vectorizer(ngram_range=(1,3)).fit_transform(self.snippets), self.check_module("numpy", "zeros")(len(self.snippets)); y[-len(snippets):] = 1
+        self.classifier(partial_fit=(X, y, [0,1]))
+
+    def suggest_features(self, code_snippet: str) -> str:
+        matches = difflib.get_close_matches(code_snippet, self.snippets)
+        X, prob = self.vectorizer(ngram_range=(1,3)).transform([code_snippet]), self.classifier().predict_proba(X)[0][1]
+        return f"Your code looks similar to: {matches[0]}. Would you like to add this as a new feature? (y/n) " if matches or prob > 0.5 else ""
+
+    def add_feature(self, code_snippet: str) -> None:
+        self.snippets.append(code_snippet); self.learn_snippets([code_snippet]); self.send_info_to_ai(code_snippet)
+
+    def send_info_to_ai(self, info: str) -> str:
+        if self.ai_url:
+            payload = {'info': info}; headers = {'content-type': 'application/json'}
+            response = requests.post(self.ai_url, data=json.dumps(payload), headers=headers); return response.text
+        else: return "No AI URL specified."
+
+    def analyze_code(self, code_snippet: str) -> Dict[str, str]:
+        results = {}
+        try: code = compile(code_snippet, '<string>', 'exec'); exec(code); ast.parse(code_snippet)
+        except SyntaxError as e: results['syntax_error'] = str(e)
+
+    def analyze_from_db(self) -> None:
+        for db_path in self.db_paths:
+            conn, cursor = sqlite3.connect(db_path), sqlite3.connect(db_path).cursor()
+            code_snippets = [row[0] for row in cursor.execute('SELECT code_snippet FROM snippets')]
