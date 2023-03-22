@@ -1,0 +1,210 @@
+import os
+import io
+import cv2
+import shutil
+import requests
+import numpy as np
+import random
+from PIL import Image, ImageChops
+import tensorflow as tf
+from mtcnn.mtcnn import MTCNN
+from deepface import DeepFace
+import nltk
+import gensim.downloader as api
+from collections import defaultdict
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+from nltk import ngrams
+
+def read_custom_apis():
+    custom_apis = {}
+    if os.path.exists("custom_apis.txt"):
+        with open("custom_apis.txt", "r") as f:
+            for line in f:
+                api_name, link = line.strip().split(",")
+                custom_apis[api_name] = link
+    return custom_apis
+
+filtered_apis = read_custom_apis()
+
+def write_custom_apis(api_name, link):
+    with open("custom_apis.txt", "a") as f:
+        f.write(f"{api_name},{link}\n")
+
+
+# Fetching and filtering APIs code
+def install_required_libraries():
+    required_modules = ['nltk', 'gensim']
+    for module in required_modules:
+        try:
+            __import__(module)
+            print(f'{module} module found!')
+        except ImportError:
+            print(f'{module} module not found, installing...')
+            os.system(f'pip install {module}')
+    print('All required modules installed/updated!')
+
+
+install_required_libraries()
+
+
+def download_required_resources():
+    nltk.download('wordnet')
+    nltk.download('omw')
+
+
+download_required_resources()
+
+model = api.load('word2vec-google-news-300')
+
+categories = ["Celebrities", "Fictional Characters", "Cartoon Characters", "Anime", "Nature"]
+image_generation_categories = ["Image", "Character", "Internet"]
+
+
+def jaccard_similarity(str1, str2):
+    a = set(ngrams(str1, 2))
+    b = set(ngrams(str2, 2))
+    c = a.intersection(b)
+    return float(len(c)) / (len(a) + len(b) - len(c))
+
+
+def get_best_api_name(category):
+    response = requests.get("https://api.publicapis.org/entries?category=" + category)
+    api_entries = response.json()["entries"]
+
+    api_names = [entry["API"] for entry in api_entries]
+    links = [entry["Link"] for entry in api_entries]
+
+    def analyze_with_word2vec(api_name, category):
+        return model.n_similarity(api_name.lower().split("_"), category.lower().split(" "))
+
+    def analyze_with_jaccard(api_name, category):
+        return jaccard_similarity(api_name.lower(), category.lower())
+
+    def analyze_with_cosine_similarity(api_name, category):
+    vectorizer = TfidfVectorizer()
+    corpus = [api_name.lower(), category.lower()]
+    tfidf_matrix = vectorizer.fit_transform(corpus)
+    return cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])[0, 0]
+
+def get_best_api_name(category):
+    response = requests.get("https://api.publicapis.org/entries?category=" + category)
+    api_entries = response.json()["entries"]
+
+    api_names = [entry["API"] for entry in api_entries]
+    links = [entry["Link"] for entry in api_entries]
+
+    def analyze_with_word2vec(api_name, category):
+        return model.n_similarity(api_name.lower().split("_"), category.lower().split(" "))
+
+    def analyze_with_jaccard(api_name, category):
+        return jaccard_similarity(api_name.lower(), category.lower())
+
+    def analyze_with_cosine_similarity(api_name, category):
+        vectorizer = TfidfVectorizer()
+        corpus = [api_name.lower(), category.lower()]
+        tfidf_matrix = vectorizer.fit_transform(corpus)
+        return cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])[0, 0]
+
+    best_score = 0
+    best_api_name = ""
+    best_link = ""
+    for api_name, link in zip(api_names, links):
+        word2vec_score = analyze_with_word2vec(api_name, category)
+        jaccard_score = analyze_with_jaccard(api_name, category)
+        cosine_similarity_score = analyze_with_cosine_similarity(api_name, category)
+
+        combined_score = (word2vec_score + jaccard_score + cosine_similarity_score) / 3
+        if combined_score > best_score:
+            best_score = combined_score
+            best_api_name = api_name
+            best_link = link
+
+    if best_score == 0:
+        custom_apis = read_custom_apis()
+        for api_name, link in custom_apis.items():
+            word2vec_score = analyze_with_word2vec(api_name, category)
+            jaccard_score = analyze_with_jaccard(api_name, category)
+            cosine_similarity_score = analyze_with_cosine_similarity(api_name, category)
+
+            combined_score = (word2vec_score + jaccard_score + cosine_similarity_score) / 3
+            if combined_score > best_score:
+                best_score = combined_score
+                best_api_name = api_name
+                best_link = link
+
+    if best_score == 0:
+        print(f"No suitable APIs found for category '{category}'.")
+        print("Searching for similar APIs...")
+        similar_api_links = search_similar_apis(category)
+        if similar_api_links:
+            print("Found the following similar APIs:")
+            for link in similar_api_links:
+                print(link)
+        else:
+            print(f"No similar APIs found for category '{category}'.")
+
+    return best_api_name, best_link
+
+def get_api_key(category):
+    api_name, api_link = get_best_api_name(category)
+    print(f"Best API for category '{category}': {api_name}")
+    if api_name in filtered_apis:
+        api_key = filtered_apis[api_name]
+        print("API key found in filtered APIs.")
+        return api_key
+    else:
+        while True:
+            use_custom_api = input("Would you like to add a custom API key? (y/n) ")
+            if use_custom_api.lower() == 'y':
+                custom_api_name = input("Please enter a name for the custom API: ")
+                custom_api_key = input("Please enter the API key for the custom API: ")
+                write_custom_apis(custom_api_name, custom_api_key)
+                print("Custom API added.")
+                return custom_api_key
+            elif use_custom_api.lower() == 'n':
+                print(f"No API key found for '{api_name}' and no custom API key added.")
+                return ""
+            else:
+                print("Invalid input, please enter 'y' or 'n'.")
+
+
+if __name__ == "__main__":
+    category = input(f"Please enter a category from {categories}: ")
+    while category not in categories:
+        print(f"Invalid category. Please enter a category from {categories}.")
+        category = input(f"Please enter a category from {categories}: ")
+    api_key = get_api_key(category)
+    print(f"API key for '{category}': {api_key}")
+    if api_key:
+        for i in range(num_images):
+            image_set = []
+            for generator in generators:
+                image = generator['function']()
+                file_name = f'{generator["name"]}_{i + 1}.png'
+                image.save(os.path.join('output', file_name))
+                image_set.append(image)
+            similarity = []
+            for j in range(len(image_set)):
+                sim = []
+                for k in range(len(image_set)):
+                    if k != j:
+                        diff = ImageChops.difference(image_set[j], image_set[k])
+                        sim.append(diff.getbbox() is None)
+                similarity.append(sum(sim))
+            max_sim = max(similarity)
+            if max_sim == 0:
+                continue
+            max_sim_idx = similarity.index(max_sim)
+            file_name = f'{generators[max_sim_idx]["name"]}_{i + 1}'
+            if not os.path.exists(file_name):
+                os.makedirs(file_name)
+            for j, image in enumerate(image_set):
+                if similarity[j] == max_sim:
+                    file_name = f'{generators[j]["name"]}_{i + 1}.png'
+                    shutil.move(os.path.join('output', file_name), os.path.join(f'{generators[j]["name"]}_{i + 1}', file_name))
+                else:
+                    file_name = f'{generators[j]["name"]}_{i + 1}.png'
+                    shutil.move(os.path.join('output', file_name), os.path.join('other', file_name))
+    else:
+        print("No API key found, exiting program.")
