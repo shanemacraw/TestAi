@@ -1,0 +1,363 @@
+import os
+import io
+import cv2
+import shutil
+import requests
+import numpy as np
+import random
+from PIL import Image, ImageChops
+import tensorflow as tf
+from mtcnn.mtcnn import MTCNN
+from deepface import DeepFace
+import nltk
+import gensim.downloader as api
+from collections import defaultdict
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+from nltk import ngrams
+
+def read_custom_apis():
+    custom_apis = {}
+    if os.path.exists("custom_apis.txt"):
+        with open("custom_apis.txt", "r") as f:
+            for line in f:
+                api_name, link = line.strip().split(",")
+                custom_apis[api_name] = link
+    return custom_apis
+
+filtered_apis = read_custom_apis()
+
+def write_custom_apis(api_name, link):
+    with open("custom_apis.txt", "a") as f:
+        f.write(f"{api_name},{link}\n")
+
+
+# Fetching and filtering APIs code
+def install_required_libraries():
+    required_modules = ['nltk', 'gensim']
+    for module in required_modules:
+        try:
+            __import__(module)
+            print(f'{module} module found!')
+        except ImportError:
+            print(f'{module} module not found, installing...')
+            os.system(f'pip install {module}')
+    print('All required modules installed/updated!')
+
+
+install_required_libraries()
+
+
+def download_required_resources():
+    nltk.download('wordnet')
+    nltk.download('omw')
+
+
+download_required_resources()
+
+model = api.load('word2vec-google-news-300')
+
+categories = ["Celebrities", "Fictional Characters", "Cartoon Characters", "Anime", "Nature"]
+image_generation_categories = ["Image", "Character", "Internet"]
+
+
+def jaccard_similarity(str1, str2):
+    a = set(ngrams(str1, 2))
+    b = set(ngrams(str2, 2))
+    c = a.intersection(b)
+    return float(len(c)) / (len(a) + len(b) - len(c))
+
+
+def get_best_api_name(category):
+    response = requests.get("https://api.publicapis.org/entries?category=" + category)
+    api_entries = response.json()["entries"]
+
+    api_names = [entry["API"] for entry in api_entries]
+    links = [entry["Link"] for entry in api_entries]
+
+    def analyze_with_word2vec(api_name, category):
+        return model.n_similarity(api_name.lower().split("_"), category.lower().split(" "))
+
+    def analyze_with_jaccard(api_name, category):
+        return jaccard_similarity(api_name.lower(), category.lower())
+
+    def analyze_with_cosine_similarity(api_name, category):
+        vectorizer = TfidfVectorizer()
+        corpus = [api_name.lower(), category.lower()]
+        tfidf_matrix = vectorizer.fit_transform(corpus)
+        return cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])[0, 0]
+
+    best_score = 0
+    best_api_name = ""
+    best_link = ""
+    for api_name, link in zip(api_names, links):
+        word2vec_score = analyze_with_word2vec(api_name, category)
+        jaccard_score = analyze_with_jaccard(api_name, category)
+        cosine_similarity_score = analyze_with_cosine_similarity(api_name, category)
+
+        combined_score = (word2vec_score + jaccard_score + cosine_similarity_score) / 3
+        if combined_score > best_score:
+            best_score = combined_score
+            best_api_name = api_name
+            best_link = link
+
+    if best_score == 0:
+        custom_apis = read_custom_apis()
+        for api_name, link in custom_apis.items():
+            word2vec_score = analyze_with_word2vec(api_name, category)
+            jaccard_score = analyze_with_jaccard(api_name, category)
+            cosine_similarity_score = analyze_with_cosine_similarity(api_name, category)
+
+            combined_score = (word2vec_score + jaccard_score + cosine_similarity_score) / 3
+            if combined_score > best_score:
+                best_score = combined_score
+                best_api_name = api_name
+                best_link = link
+
+    if best_score == 0:
+        print(f"No suitable APIs found for category '{category}'.")
+        print("Searching for similar APIs...")
+        similar_api_links = search_similar_apis(category)
+        if similar_api_links:
+            print("Found the following similar APIs:")
+            for link in similar_api_links:
+                print(link)
+        else:
+            print(f"No similar APIs found for category '{category}'.")
+
+    return best_api_name, best_link
+
+
+
+def search_public_apis_by_keyword(keyword):
+    api_sources = ["https://api.publicapis.org/entries"]
+
+    api_results = []
+
+    for source in api_sources:
+        response = requests.get(f"{source}?search={keyword}")
+
+        if response.status_code == 200:
+            data = response.json()
+
+            if "entries" in data:
+                for entry in data["entries"]:
+                    if not entry["Auth"] and entry["Link"]:
+                        api_results.append({"name": entry["API"], "link": entry["Link"]})
+
+            if len(api_results) >= 10:
+                break
+
+    if not api_results:
+        print("No related APIs found.")
+
+        # Prompt user to manually add API
+        while True:
+            add_api = input("Would you like to manually add an API? (y/n) ")
+            if add_api.lower() == 'y':
+                api_name = input("Please enter the name of the API: ")
+                api_link = input("Please enter the link for the API: ")
+                with open('custom_apis.txt', 'a') as f:
+                    f.write(f"{api_name},{api_link}\n")
+                print("API added to custom APIs.")
+                break
+            elif add_api.lower() == 'n':
+                print("No APIs added.")
+                break
+            else:
+                print("Invalid input, please enter 'y' or 'n'.")
+
+        # Search for similar APIs
+        while True:
+            search_similar_apis = input("Would you like to search for similar APIs? (y/n) ")
+            if search_similar_apis.lower() == 'y':
+                # Perform search for similar APIs
+                # ...
+                print("Similar APIs found.")
+                break
+            elif search_similar_apis.lower() == 'n':
+                print("No similar APIs found.")
+                break
+            else:
+                print("Invalid input, please enter 'y' or 'n'.")
+
+    else:
+        print(f"{len(api_results)} related APIs found:")
+        for api in api_results:
+            print(f"{api['name']} - {api['link']}")
+
+        # Prompt user to enter API key
+        selected_api = input("Please select an API from the list above: ")
+        api_key = input(f"Please enter the API key for {selected_api}: ")
+
+        # Return selected API and API key
+        return selected_api, api_key
+
+
+# Main image generation code
+
+num_images = 10  # Set this to the desired number of images
+
+# Prompt the user for the API key
+selected_category = "Celebrities"  # Replace this with the category you want to use
+API_KEY = input(f"Please enter the API key for {filtered_apis[selected_category]}: ")
+
+# Fetch the API website link
+API_WEBSITE_LINK = "https://www.example.com"  # Replace this with the actual API website link
+print(f"Visit {API_WEBSITE_LINK} if you need to obtain an API key.")
+
+
+# The rest of the image generation code remains the same as the previous answer
+
+def load_image(img):
+    if isinstance(img, tf.Tensor):
+        img = img.numpy()
+    if isinstance(img, list):
+        img = img[0]
+    if img.dtype != np.uint8:
+        img = img.astype(np.uint8)
+    if len(img.shape) == 2:
+        img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
+    elif img.shape[2] == 4:
+        img = img[..., :3]
+    if not isinstance(img, np.ndarray):
+        raise ValueError("Unsupported 'img' type: %s" % type(img))
+    return Image.fromarray(img)
+
+
+def gender_generator():
+    gender_probs = {'male': 0.45, 'female': 0.55}
+    gender = np.random.choice(list(gender_probs.keys()), p=list(gender_probs.values()))
+    return gender
+
+
+def ethnicity_generator():
+    ethnicity_probs_set_1 = {
+        'Caucasian': 0.50,
+        'African': 0.20,
+        'Asian': 0.15,
+        'Hispanic': 0.15
+    }
+
+    ethnicity_probs_set_2 = {
+        'Caucasian': 0.40,
+        'African': 0.30,
+        'Asian': 0.20,
+        'Hispanic': 0.10
+    }
+
+    ethnicity_probs_set_3 = {
+        'Caucasian': 0.30,
+        'African': 0.25,
+        'Asian': 0.35,
+        'Hispanic': 0.10
+    }
+
+    ethnicity_probs_set_4 = {
+        'Caucasian': 0.45,
+        'African': 0.25,
+        'Asian': 0.10,
+        'Hispanic': 0.20
+    }
+
+    ethnicity_probs_list = [ethnicity_probs_set_1, ethnicity_probs_set_2, ethnicity_probs_set_3, ethnicity_probs_set_4]
+    ethnicity_probs = random.choice(ethnicity_probs_list)
+
+    total_prob = sum(ethnicity_probs.values())
+    for ethnicity in ethnicity_probs:
+        ethnicity_probs[ethnicity] /= total_prob
+
+    ethnicity = random.choices(list(ethnicity_probs.keys()), list(ethnicity_probs.values()))[0]
+
+    return ethnicity
+
+
+def person_generator():
+    detector = MTCNN()
+    model = DeepFace.build_model("Facenet")
+    age = random.randint(1, 100)
+    gender = gender_generator()
+    ethnicity = ethnicity_generator()
+
+    # Replace the API call and API_KEY below with the appropriate API you are using
+    response = requests.get(
+        f"https://api.example.com/api/v1/faces?per_page=1&gender={gender}&age={age}&ethnicity={ethnicity}&api_key={API_KEY}")
+    img_url = response.json()["faces"][0]["urls"][4]["512"]
+    img = Image.open(io.BytesIO(requests.get(img_url).content)).convert("RGB")
+
+    faces = detector.detect_faces(np.array(img))
+    if len(faces) == 0:
+        return person_generator()
+
+    face = faces[0]
+    x, y, w, h = face["box"]
+    img = img.crop((x, y, x + w, y + h))
+
+    return img
+
+
+def character_generator():
+    keyword = 'enter_keyword_here'
+    response = requests.get(f'https://api.example.com/?{keyword}')
+    img = Image.open(io.BytesIO(response.content)).convert('RGB')
+    img = img.resize((img_width, img_height))
+    return img
+
+
+def internet_generator():
+    keyword = 'enter_keyword_here'
+    response = requests.get(f'https://api.example.com/?{keyword}')
+    img = Image.open(io.BytesIO(response.content)).convert('RGB')
+
+    faces = detector.detect_faces(np.array(img))
+    if len(faces) == 0:
+        raise ValueError("No face detected")
+
+    face = faces[0]
+    x, y, w, h = face["box"]
+    img = img.crop((x, y, x + w, y + h))
+
+    return img
+
+
+# Create list of generators
+generators = [
+    {'name': 'person', 'function': person_generator},
+    {'name': 'character', 'function': character_generator},
+    {'name': 'internet', 'function': internet_generator}
+]
+
+# Create directory for output images
+if not os.path.exists('output'):
+    os.makedirs('output')
+
+# Generate and save images
+for i in range(num_images):
+    image_set = []
+    for generator in generators:
+        image = generator['function']()
+        file_name = f'{generator["name"]}_{i + 1}.png'
+        image.save(os.path.join('output', file_name))
+        image_set.append(image)
+    similarity = []
+    for j in range(len(image_set)):
+        sim = []
+        for k in range(len(image_set)):
+            if k != j:
+                diff = ImageChops.difference(image_set[j], image_set[k])
+                sim.append(diff.getbbox() is None)
+        similarity.append(sum(sim))
+    max_sim = max(similarity)
+    if max_sim == 0:
+        continue
+    max_sim_idx = similarity.index(max_sim)
+    file_name = f'{generators[max_sim_idx]["name"]}_{i + 1}'
+    if not os.path.exists(file_name):
+        os.makedirs(file_name)
+    for j, image in enumerate(image_set):
+        if similarity[j] == max_sim:
+            file_name = f'{generators[j]["name"]}_{i + 1}.png'
+            shutil.move(os.path.join('output', file_name), os.path.join(f'{generators[j]["name"]}_{i + 1}', file_name))
+        else:
+            file_name = f'{generators[j]["name"]}_{i + 1}.png'
+            shutil.move(os.path.join('output', file_name), os.path.join('other', file_name))
